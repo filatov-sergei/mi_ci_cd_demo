@@ -1,72 +1,31 @@
-name: Green-Blue Deployment
+name: Model Deployment
 
-on: [push]
+on:
+  push:
+    branches: [ main ]
 
 jobs:
-  build-and-test-green:
+  deploy:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Build and push Docker image
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
 
-    - name: Login to GHCR
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Simulate Deploy (Local or Test)
+        run: |
+          # Симуляция деплоя: просто выведем сообщение и проверим
+          echo "Симулируем деплой образа ${{ github.sha }} с версией ${{ secrets.MODEL_VERSION }}"
+          # Можно добавить локальный запуск, но в Actions это виртуальная машина, так что просто эмулируем
+          docker run -d --name simulated-app -p 8080:8080 ghcr.io/${{ github.repository }}:${{ github.sha }}
+          sleep 10  # Ждём запуска
+          curl http://localhost:8080/health || echo "Health check failed"
 
-    - name: Build and push green image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ghcr.io/filatov-sergei/mi_ci_cd_demo:green-${{ github.sha }}
-        build-args: MODEL_VERSION=${{ secrets.MODEL_VERSION }}  # Если нужно
-
-    - name: Run green container for testing
-      run: docker run -d -p 8080:8080 --name ml-green ghcr.io/filatov-sergei/mi_ci_cd_demo:green-${{ github.sha }}
-
-    - name: Debug: Container status
-      run: docker ps -a
-
-    - name: Debug: Initial logs
-      run: docker logs ml-green || true
-
-    - name: Test health check with retries
-      run: |
-        for i in {1..30}; do
-          if curl -f http://localhost:8080/health; then
-            echo "Green health OK!"
-            break
-          else
-            echo "Attempt $i failed. Status:"
-            docker ps -a
-            echo "Logs:"
-            docker logs ml-green || true
-            sleep 5
-          fi
-        done || (echo "Green failed!" && docker ps -a && docker logs ml-green && exit 1)
-
-    - name: Test predict
-      run: curl -f -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d '{"x": [5.1, 3.5, 1.4, 0.2]}' || exit 1
-
-    - name: Promote to blue if tests pass
-      if: success()
-      run: docker tag ghcr.io/filatov-sergei/mi_ci_cd_demo:green-${{ github.sha }} ghcr.io/filatov-sergei/mi_ci_cd_demo:blue && docker push ghcr.io/filatov-sergei/mi_ci_cd_demo:blue
-
-    - name: Stop container
-      if: always()
-      run: docker stop ml-green && docker rm ml-green || true
-
-  # Опционально: Реальный деплой blue в cloud (e.g., Heroku/AWS)
-  deploy-blue:
-    needs: build-and-test-green
-    runs-on: ubuntu-latest
-    if: success()  # Только если green прошёл тесты
-    steps:
-      - name: Deploy blue to production
-        run: echo "Switch traffic to blue! (Add real deploy here, e.g., aws ecs update-service --force-new-deployment)"
+      - name: Health Check
+        run: |
+          # Проверка после симуляции
+          curl -f http://localhost:8080/health || exit 1

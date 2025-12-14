@@ -2,7 +2,8 @@ version: '3'
 services:
   ml-service-blue:
     image: ml-service:v1.0.0
-    ports:
-      - "8081:8080"
+    build: .
     environment:
       - MODEL_VERSION=v1.0.0
+    ports:
+      - "8081:8080"
