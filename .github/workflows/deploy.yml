@@ -1,0 +1,53 @@
+name: Model Deployment
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }},ghcr.io/${{ github.repository }}:${{ secrets.MODEL_VERSION }}
+          build-args: |
+            MODEL_VERSION=${{ secrets.MODEL_VERSION }}  # Передаёт секрет в build (если нужно, но ENV уже в Dockerfile)
+
+      - name: Imitate deployment in runner (run container)
+        run: |
+          # Запускаем контейнер в background, имитируя деплой
+          docker run -d -p 8080:8080 --name ml-service ghcr.io/${{ github.repository }}:${{ secrets.MODEL_VERSION }}
+          sleep 10  # Ждём запуска (адаптируй время)
+
+      - name: Health check after deploy
+        run: |
+          curl -f http://localhost:8080/health || exit 1  # Проверяет статус и версию
+          echo "Health check passed!"
+
+      - name: Predict check after deploy
+        run: |
+          curl -f -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d '{"x": [1,2,3]}' || exit 1  # Адаптируй под твою модель
+          echo "Predict check passed!"
+
+      - name: Cleanup (stop container)
+        if: always()
+        run: |
+          docker stop ml-service || true
+          docker rm ml-service || true
