@@ -1,44 +1,96 @@
-# Проект: Автоматизированное развертывание ML-модели с CI/CD
+# Проект: Автоматизированное Развертывание ML-Модели с Blue-Green Стратегией
 
 ## Описание
-Этот проект реализует автоматизированное развертывание ML-модели с использованием Docker, GitHub Actions и стратегии Blue-Green Deployment. Модель (линейная регрессия, сохранена в model.pkl) упакована в FastAPI-сервис с эндпоинтами /health (статус и версия) и /predict (инференс). Версия модели передается через ENV MODEL_VERSION.
+Этот проект реализует задание по модулю 3 "Автоматизированное развертывание с помощью CI/CD". Выбрана стратегия **Blue-Green Deployment** для безопасного развертывания ML-модели. 
 
-### Структура
-- `app/`: Код приложения (main.py, requirements.txt, model.pkl).
-- `Dockerfile`: Для сборки образа.
-- `docker-compose.blue.yml` и `docker-compose.green.yml`: Для версий v1.0.0 (blue) и v1.1.0 (green).
-- `nginx.conf` и `docker-compose.nginx.yml`: Балансировщик для Blue-Green.
-- `.github/workflows/deploy.yml`: CI/CD пайплайн.
+- **Модель**: LogisticRegression (из scikit-learn), обученная на данных с 4 признаками (features). Модель сохранена в `app/model.pkl`.
+- **API**: REST с FastAPI. Эндпоинты: `/health` (статус и версия) и `/predict` (инференс, ожидает JSON с полем "x" — список из 4 floats).
+- **Версии**: Blue — v1.0.0 (стабильная), Green — v1.1.0 (новая).
+- **Балансировщик**: Nginx для переключения трафика.
+- **CI/CD**: GitHub Actions для сборки, пуша в GHCR и симуляции деплоя (реальный деплой в облако не реализован из-за отсутствия CLOUD_TOKEN; вместо этого симулируется локальный запуск в Actions).
+- **Контейнеризация**: Docker с минимальным образом python:3.11-slim.
 
-### Стратегия развертывания: Blue-Green
-- **Blue**: Старая версия (v1.0.0) на порту 8081.
+Проект протестирован локально. После деплоя (симуляции) проверены эндпоинты с версией модели.
+
+## Структура Репозитория
+ml-deployment-project/
+├── app/
+│   ├── main.py          # Код API-сервиса (FastAPI)
+│   ├── model.pkl        # Обученная модель (LogisticRegression с 4 фичами)
+│   └── requirements.txt # Зависимости (fastapi, uvicorn, scikit-learn, joblib)
+├── .github/
+│   └── workflows/
+│       └── deploy.yml   # Workflow для CI/CD (сборка, пуш, симуляция деплоя)
+├── docker-compose.blue.yml  # Blue версия (v1.0.0)
+├── docker-compose.green.yml # Green версия (v1.1.0)
+├── Dockerfile           # Файл для сборки Docker-образа
+├── nginx.conf           # Конфигурация Nginx для балансировки трафика
+└── README.md            # Этот файл с документацией
+
+## Требования
+- Docker и docker-compose установлены.
+- GitHub-аккаунт для CI/CD (добавьте секреты: `MODEL_VERSION` = "v1.1.0").
+
+## Локальный Запуск и Тестирование
+### Шаг 1: Сборка Docker-образа
+1. Соберите образ для версии v1 (или укажите тег по версии):
+docker build -t ml-service:v1 .
+
+### Шаг 2: Запуск Blue и Green версий
+2. Запустите Blue (v1.0.0):
+docker-compose -f docker-compose.blue.yml up -d
+
+3. Запустите Green (v1.1.0):
+docker-compose -f docker-compose.green.yml up -d
+
+### Шаг 3: Запуск Nginx (балансировщик)
+4. Запустите Nginx (изначально трафик на Blue):
+docker run -d -p 80:80 -v $(pwd)/nginx.conf:/etc/nginx/nginx.conf nginx
+
+### Шаг 4: Проверка Эндпоинтов
+5. Проверьте /health (через Nginx, ожидается версия из nginx.conf):
+curl http://localhost/health
+
+Ожидаемый ответ: `{"status": "ok", "version": "v1.0.0"}` (или v1.1.0 после переключения).
+
+6. Проверьте /predict (POST-запрос с 4 фичами, так как модель ожидает именно 4):
+curl -X POST http://localhost/predict 
+
+-H "Content-Type: application/json" 
+
+-d '{"x": [1, 2, 3, 4]}'
+
+Ожидаемый ответ: `{"prediction": [класс, например, 0 или 1]}` (зависит от модели и данных).
+
+Если порт занят, убейте процесс: `kill $(lsof -t -i:80)` (или соответствующий порт).
+
+## Стратегия Развертывания: Blue-Green
+- **Blue**: Стабильная версия (v1.0.0) на порту 8081.
 - **Green**: Новая версия (v1.1.0) на порту 8082.
-- Трафик изначально на blue (через Nginx). Переключение: измени `proxy_pass` в nginx.conf на `http://green;` и перезапусти `docker-compose -f docker-compose.nginx.yml up -d`.
-- Rollback: Верни `proxy_pass` на `http://blue;` и перезапусти Nginx. Тестирование: Проверь /health для обеих (curl http://localhost:8081/health и curl http://localhost:8082/health). Если green нестабильна (ошибки в /health), откати.
-- Это позволяет нулевое время простоя и быстрый откат.
+- **Переключение трафика**: Измените `upstream backend` в `nginx.conf` (с 8081 на 8082) и перезапустите Nginx:
+docker stop <nginx_container_id> && docker run -d -p 80:80 -v $(pwd)/nginx.conf:/etc/nginx/nginx.conf nginx
 
-### Мониторинг и метрики
-- **/health**: Возвращает статус ("ok") и версию модели для проверки стабильности. Метрика: Если статус != "ok", модель нестабильна — откат.
-- **Логи**: В main.py добавлено логирование (INFO для успешных запросов, ERROR для ошибок). Просмотр: `docker logs <container_id>`.
-- **Версии**: Контролируются через ENV MODEL_VERSION. Откат — переключение на blue.
-- Анализ: После деплоя проверяй метрики (response time, error rate) через логи или инструменты вроде Prometheus (не реализовано здесь, но можно добавить).
+- **Откат (Rollback)**: Верните upstream на 8081 в `nginx.conf` и перезапустите Nginx. Это позволяет мгновенно вернуться к стабильной версии при ошибках.
+- **Мониторинг**: Эндпоинт /health возвращает статус и версию. Логи: `docker logs <container_name>`. Метрики: Версия модели через переменную окружения MODEL_VERSION. Стабильность проверяется путём сравнения ответов /predict до и после переключения.
 
-### Инструкции по запуску (локально, 5 команд)
-1. Собери образ: `docker build -t ml-service:v1.0.0 .` (для v1.1.0 измени тег и ENV в Dockerfile).
-2. Запусти blue: `docker-compose -f docker-compose.blue.yml up -d`.
-3. Запусти green: `docker-compose -f docker-compose.green.yml up -d`.
-4. Запусти Nginx: `docker-compose -f docker-compose.nginx.yml up -d`.
-5. Проверь: `curl http://localhost/health` (должен вернуть {"status": "ok", "version": "v1.0.0"}).
+Стратегия протестирована: обе версии доступны одновременно, переключение работает без downtime, откат — мгновенный.
 
-### Проверка эндпоинтов
-- Health: `curl http://localhost/health` → {"status": "ok", "version": "v1.x.x"}.
-- Predict: `curl -X POST http://localhost/predict -H "Content-Type: application/json" -d '{"x": [1,2,3]}'` → {"prediction": [результат]}.
-- После переключения на green: Повтори проверки, версия изменится на "v1.1.0".
+## CI/CD через GitHub Actions
+- Файл: `.github/workflows/deploy.yml`.
+- Триггер: Пуш в main.
+- Шаги: 
+- Сборка Docker-образа.
+- Пуш в GitHub Container Registry (GHCR).
+- Симуляция деплоя (локальный запуск контейнера в Actions с проверкой /health и /predict).
+- Секреты: Добавьте в GitHub Settings > Secrets:
+- `MODEL_VERSION` (например, "v1.1.0").
+- `GITHUB_TOKEN` (генерируется автоматически).
+- Реальный деплой в облако симулирован из-за отсутствия CLOUD_TOKEN. В production замените на API-вызов (например, Heroku).
 
-### CI/CD и имитация деплоя
-Поскольку в задании не указано конкретное облако и доступ не предоставлен, деплой имитируется в GitHub Runner:
-- Workflow (.github/workflows/deploy.yml) собирает Docker-образ, пушит в GHCR с тегом по секрету MODEL_VERSION.
-- Имитирует деплой: Запускает контейнер в runner (docker run -d), проверяет /health и /predict через curl к localhost:8080.
-- Если проверки fail — workflow падает (аналог rollback).
-- Секреты: MODEL_VERSION в GitHub Secrets (не в коде).
-- Логи Actions показывают метрики (вывод curl, статусы).
+При пушe в main workflow запустится автоматически. Проверьте логи в GitHub > Actions.
+
+## Проверка Результата
+- После локального запуска: Используйте команды выше для /health и /predict.
+- После симуляции в Actions: Логи покажут вывод curl (успешные ответы).
+
+## Скриншоты
