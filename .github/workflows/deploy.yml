@@ -14,39 +14,35 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Docker image
+      - name: Build Docker image (local only, no push)
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }},ghcr.io/${{ github.repository }}:${{ secrets.MODEL_VERSION }}
+          push: false
+          tags: mi_ci_cd_demo:${{ secrets.MODEL_VERSION }}
           build-args: |
-            MODEL_VERSION=${{ secrets.MODEL_VERSION }}  # Передаёт секрет в build (если нужно, но ENV уже в Dockerfile)
+            MODEL_VERSION=${{ secrets.MODEL_VERSION }}
 
-      - name: Imitate deployment in runner (run container)
+      - name: Imitate deployment (run container)
         run: |
-          # Запускаем контейнер в background, имитируя деплой
-          docker run -d -p 8080:8080 --name ml-service ghcr.io/${{ github.repository }}:${{ secrets.MODEL_VERSION }}
-          sleep 10  # Ждём запуска (адаптируй время)
+          docker run -d -p 8080:8080 --name ml-service mi_ci_cd_demo:${{ secrets.MODEL_VERSION }}
+          sleep 30  # Ждём подольше, чтобы сервис запустился
 
-      - name: Health check after deploy
+      - name: Check container logs
         run: |
-          curl -f http://localhost:8080/health || exit 1  # Проверяет статус и версию
+          docker logs ml-service  # Покажет, что в логах контейнера (ошибки, если есть)
+
+      - name: Health check
+        run: |
+          curl -f http://localhost:8080/health || exit 1
           echo "Health check passed!"
 
-      - name: Predict check after deploy
+      - name: Predict check
         run: |
-          curl -f -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d '{"x": [1,2,3]}' || exit 1  # Адаптируй под твою модель
+          curl -f -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d '{"x": [1,2,3]}' || exit 1
           echo "Predict check passed!"
 
-      - name: Cleanup (stop container)
+      - name: Cleanup
         if: always()
         run: |
           docker stop ml-service || true
