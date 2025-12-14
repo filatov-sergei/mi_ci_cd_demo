@@ -18,18 +18,23 @@ jobs:
     - name: Run container
       run: docker run -d -p 8080:8080 --name ml-test test
 
-    - name: Wait for container to start
-      run: sleep 30
+    - name: Debug: Check running containers
+      run: docker ps
 
-    - name: Check container logs (for debug)
+    - name: Debug: Container logs
       run: docker logs ml-test || true
 
-    - name: Test health check
-      run: curl -f http://localhost:8080/health || exit 1
+    - name: Wait for health check with retries
+      run: |
+        for i in {1..20}; do  # 20 попыток = 100 сек (увеличь, если нужно)
+          curl -f http://localhost:8080/health && echo "Health check passed!" && break
+          echo "Health not ready, retrying in 5 sec... (attempt $i)"
+          sleep 5
+        done || (echo "Health check failed after retries" && docker logs ml-test && exit 1)  # Логи при fail
 
     - name: Test predict
       run: curl -f -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d '{"x": [5.1, 3.5, 1.4, 0.2]}' || exit 1
 
     - name: Stop container
       if: always()
-      run: docker stop ml-test && docker rm ml-test
+      run: docker stop ml-test && docker rm ml-test || true
