@@ -19,7 +19,7 @@ jobs:
       run: docker run -d -p 8080:8080 --name ml-test test
 
     - name: Wait for container to start
-      run: sleep 10
+      run: sleep 30
 
     - name: Check container logs (for debug)
       run: docker logs ml-test || true
